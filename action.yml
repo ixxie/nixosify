@@ -1,0 +1,24 @@
+# convert to nixos
+name: 'Convert to NixOS'
+description: 'Convert a Debian/Ubuntu machine to NixOS'
+inputs:
+  target:  # id of input
+    description: 'IP of target for conversion'
+    required: true
+  tempkey:
+    description: 'Temporary private key to access the machine to be converted'
+    required: true
+  tempkey_pub:
+    description: 'Temporary public key to access the machine to be converted'
+    required: true
+  authkeys:
+    description: 'Authorized SSH keys (newline seperated) to include in the NixOS machine'
+    required: true
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - ${{ inputs.target }}
+    - ${{ inputs.tempkey }}
+    - ${{ inputs.tempkey_pub }}
+    - ${{ inputs.authkeys }}

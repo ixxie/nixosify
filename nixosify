@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+dir="$(path=$(dirname "$(realpath "$BASH_SOURCE")") && echo "${path%/}")"
+source "${dir}"/lib.sh
+
+# Script to use Clever's kexec method 
+# to install NixOS on a temporary host
+# and save the resulting image
+
+target="$1"
+tempkey="$2"
+tempkey_pub="$3"
+authkeys="$4"
+
+phase 'Write keys to files'
+
+echo -e "${tempkey}" > "${dir}/tempkey"
+chmod 600 "${dir}/tempkey"
+echo -e "${tempkey_pub}" > "${dir}/tempkey.pub"
+chmod 644 "${dir}/tempkey.pub"
+
+phase 'Wait for server SSH to be available'
+
+await 10 "serverReady ${dir}/tempkey ${target}"
+
+phase 'Move key to target'
+
+copy "${dir}/tempkey" \
+  "${dir}/tempkey.pub" \
+  "root@${target}:/ssh_pubkey"
+
+phase 'Copy nixos kexec tarball'
+
+copy "${dir}/tempkey" \
+  /nixos-system-x86_64-linux.tar.xz \
+  "root@${target}:/"
+
+phase 'Booting into NixOS with kexec'
+
+kexecNixOS "${dir}/tempkey" "${target}"
+ 
+phase 'Waiting for kexec to boot up NixOS'
+
+await 10 "kexecReady ${dir}/tempkey ${target}"
+
+phase 'Formatting disk & generating configuration'
+
+run "${dir}/tempkey" "${target}" '
+  mkfs.ext4 -F /dev/sda1;
+  mount /dev/sda1 /mnt;
+  nixos-generate-config --root /mnt;
+'
+
+phase 'Copying temporary configuration to target'
+
+copy "${dir}/tempkey" \
+  "${dir}/configuration.nix" \
+  "root@${target}:/mnt/etc/nixos/configuration.nix"
+
+phase 'Installing NixOS'
+
+run "${dir}/tempkey" "${target}" "
+  export authkeys='${authkeys}';
+  nixos-install;
+  reboot;
+"
+ 
+echo "Target ${target} succesfully converted to NixOS!"
+
+phase 'Waiting for SSH to be available'
+
+await 10 "serverReady ${dir}/tempkey ${target}"
+
+echo "SSH on target ${target} now available; target NixOSified and ready for action!"

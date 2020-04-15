@@ -1,0 +1,72 @@
+on: [push]
+
+env:
+  prefix: 'test-nixosify'
+  HCLOUD_TOKEN: ${{ secrets.hcloud_token }}
+
+jobs:
+  test-nixosify:
+    runs-on: ubuntu-latest
+    name: Test nixosify action
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install depedencies
+        env:
+          hcloud_binary: https://github.com/hetznercloud/cli/releases/download/v1.16.2/hcloud-linux-amd64.tar.gz
+        run: |
+          curl -L $hcloud_binary --output ./hcloud.tar.gz
+          tar -xf ./hcloud.tar.gz
+          sudo cp ./hcloud /usr/local/bin/hcloud
+          sudo apt-get install jq
+      - name: Create test servers
+        id: create-test-servers
+        env:
+          number: 1
+          size: 'cx11'
+          image: 'ubuntu-18.04'
+        run: |
+          host_info=""
+          for n in `seq ${number}`
+          do
+            name="${prefix}-${n}"
+            hcloud server create \
+              --name ${name} \
+              --type ${size} \
+              --image ${image} \
+              --ssh-key nixosify
+            ip=$(hcloud server describe ${name} -o json | jq -r .public_net.ipv4.ip)
+            host_info="${host_info}${name}\t${ip}\n"
+          done
+          echo "::set-env name=host_info::$host_info"
+      - name: Get host IP
+        id: get-host-ip
+        run: |
+          host_ip=$(printf $host_info | awk '{print $2}')
+          echo "$host_ip"
+          echo "::set-env name=host_ip::$host_ip"
+      - name: Test nixosify
+        uses: ./
+        id: nixosify
+        with:
+          target: ${{ env.host_ip }}
+          tempkey: ${{ secrets.nixosify_key }}
+          tempkey_pub: ${{ secrets.nixosify_key_pub }}
+          authkeys: ${{ secrets.nixosify_key_pub }}
+      - name: Test ssh connection
+        env:
+          authkey: ${{ secrets.nixosify_key }}
+        run: |
+          source ./lib.sh
+          echo -e "${authkey}" > ~/authkey
+          chmod 600 ~/authkey
+          run ~/authkey "${host_ip}" 'uname -a'
+      - name: Delete test servers
+        if: always()
+        run: |
+          hcloud server list -o noheader -o columns=name \
+            | awk -v pattern="$prefix" '$0 ~ pattern' \
+            | while read -r host; 
+          do 
+            hcloud server delete $host 
+          done
