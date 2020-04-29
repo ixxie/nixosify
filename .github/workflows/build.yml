@@ -1,0 +1,125 @@
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+env:
+  prefix: 'nixosify-build-test'
+  HCLOUD_TOKEN: ${{ secrets.hcloud_token }}
+  DOCKERHUB_TOKEN: ${{ secrets.dockerhub_token }}
+
+jobs:
+  test-nixosify:
+    runs-on: ubuntu-latest
+    name: Test nixosify action
+    steps:
+
+      # initial setup
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      # build phase
+      - name: Build nixosify image
+        run: |
+          docker build -t "sparkletco/nixosify:test" .
+
+      # test phase
+      - name: Install test depedencies
+        env:
+          hcloud_binary: https://github.com/hetznercloud/cli/releases/download/v1.16.2/hcloud-linux-amd64.tar.gz
+        run: |
+          curl -L $hcloud_binary --output ./hcloud.tar.gz
+          tar -xf ./hcloud.tar.gz
+          sudo cp ./hcloud /usr/local/bin/hcloud
+          sudo apt-get install jq
+      - name: Create test servers
+        env:
+          number: 1
+          size: 'cx11'
+          image: 'ubuntu-18.04'
+        run: |
+          host_info=""
+          for n in `seq ${number}`
+          do
+            name="${prefix}-${n}"
+            hcloud server create \
+              --name ${name} \
+              --type ${size} \
+              --image ${image} \
+              --ssh-key nixosify
+            ip=$(hcloud server describe ${name} -o json | jq -r .public_net.ipv4.ip)
+            host_info="${host_info}${name}\t${ip}\n"
+          done
+          echo "::set-env name=host_info::$host_info"
+      - name: Get host IP
+        run: |
+          host_ip=$(printf $host_info | awk '{print $2}')
+          echo "$host_ip"
+          echo "::set-env name=host_ip::$host_ip"
+      - name: Test nixosify
+        uses: ./
+        with:
+          target: ${{ env.host_ip }}
+          tempkey: ${{ secrets.nixosify_key }}
+          tempkey_pub: ${{ secrets.nixosify_key_pub }}
+          authkeys: ${{ secrets.nixosify_key_pub }}
+          tag: 'test'
+      - name: Test ssh connection
+        env:
+          authkey: ${{ secrets.nixosify_key }}
+        run: |
+          source ./lib.sh
+          echo -e "${authkey}" > ~/authkey
+          chmod 600 ~/authkey
+          run ~/authkey "${host_ip}" 'uname -a'
+      - name: Delete test servers
+        if: always()
+        run: |
+          hcloud server list -o noheader -o columns=name \
+            | awk -v pattern="$prefix" '$0 ~ pattern' \
+            | while read -r host; 
+          do 
+            hcloud server delete $host 
+          done
+
+      # publish phase
+      - name: Create nixosify version tag
+        if: github.event.pull_request.merged == true
+        run: |
+          # fetch previous major and minor version
+          latest_tag=$(git describe --tags --abbrev=0)
+          version_array=($(echo "$latest_tag" | tr '.' ' ' | tr -d 'v'))
+          let major_version="${version_array[0]}"
+          let minor_version="${version_array[1]}"
+          
+          # count major and minor changes
+          let all_changes=$(
+            git log "$latest_tag"..HEAD --oneline | wc -l
+          )
+          let major_changes=$(
+            git log --grep="MAJOR" "$latest_tag"..HEAD --oneline | wc -l
+          )
+          echo $all_changes
+          echo $major_changes
+          let minor_changes=all_changes-major_changes
+          # generate next version
+          if [[ $major_changes > 0 ]]; then
+            let major_version=major_version+1
+            let minor_version=0
+          elif [[ $minor_changes > 0 ]]; then
+            let minor_version=minor_version+1
+          else
+            true # do nothing if nothing changed
+          fi
+          new_version="v${major_version}.${minor_version}"
+          # tag new version
+          git tag $new_version
+          git push origin --tags
+          echo "::set-env name=version::$new_version"
+      - name: Publish nixosify image
+        if: github.event.pull_request.merged == true
+        run: |
+          docker login -u sparkletbot -p $DOCKERHUB_TOKEN
+          docker tag sparkletco/nixosify:test sparkletco/nixosify:latest
+          docker tag sparkletco/nixosify:test "sparkletco/nixosify:$new_version"
+          docker image rm sparkletco/nixosify:test
+          docker push sparkletco/nixosify:latest

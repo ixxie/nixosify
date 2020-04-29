@@ -14,9 +14,13 @@ inputs:
   authkeys:
     description: 'Authorized SSH keys (newline seperated) to include in the NixOS machine'
     required: true
+  tag:
+    description: 'Which Docker image tag to use'
+    required: true
+    default: 'latest'
 runs:
   using: 'docker'
-  image: 'Dockerfile'
+  image: ${{ format('sparkletco/nixosify:{0}', inputs.tag) }}
   args:
     - ${{ inputs.target }}
     - ${{ inputs.tempkey }}
