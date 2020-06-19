@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+arg="$1"
+
+case $arg in
+    -t|--target)
+    target="$2"
+    shift # past argument
+    shift # past value
+    ;;   
+    -p|--pubkey)
+    pubkey="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -k|--key)
+    key="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -a|--authkey)
+    authkey="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    *)    # unknown option
+    POSITIONAL+=("$1") # save it in an array for later
+    shift # past argument
+    ;;
+esac
+done
+
+target=${target:-${POSITIONAL[0]}} # use positional if name arg is missing
+authkey=${authkey:-$pubkey} # default authkey to pubkey if not explicitly passed
+
+# convert filepath args to strings
+key_str=$(cat $key)
+pubkey_str=$(cat $pubkey)
+authkey_str=$(cat $authkey)
+
+# build the nixosify runtime
+docker build --tag nixosify-runtime .
+
+# execute nixosify with arguments
+docker run nixosify-runtime "$target" "$key_str" "$pubkey_str" "$authkey_str" 
